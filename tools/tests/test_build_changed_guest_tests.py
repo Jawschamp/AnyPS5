@@ -107,8 +107,10 @@ class GuestTestTargets(unittest.TestCase):
         guest = self.target("guest_pad_tests", source="core/libs/tests/Guest.cpp", fragment="libc.prx")
         self.assertEqual(self.selections(self.fixture([guest]), ["core/relinker/codegen/src/Amd64OnlyConverter.cpp"]), [])
 
-    def graph_selections(self, changed, closures):
+    def graph_selections(self, changed, closures, since=()):
         graph = Path(self.temporary.name) / "test-graph.json"
+        since_file = Path(self.temporary.name) / "graph-changed.txt"
+        since_file.write_text("\0".join(since or ()), encoding="utf-8")
         tests = {Path(output).stem: {"registered": [], "arguments": [], "sets": [], "requires": [], "depends": [],
                                      "target": output} for output in closures}
         graph.write_text(json.dumps({"tests": tests, "closures": closures}), encoding="utf-8")
@@ -119,7 +121,7 @@ class GuestTestTargets(unittest.TestCase):
             self.fixture([guest_a, guest_b])
         source_root, targets = build_changed_guest_tests.host_only.read_reply(build_dir.resolve())
         with contextlib.redirect_stdout(io.StringIO()):
-            return build_changed_guest_tests.guest_test_targets(source_root, targets, changed, graph)
+            return build_changed_guest_tests.guest_test_targets(source_root, targets, changed, graph, None if since is None else since_file)
 
     def test_graph_narrows_a_header_change_to_the_guest_tests_that_include_it(self):
         closures = {"tests/guest_a_tests.exe": ["core/libs/tests/GuestA.cpp"],
@@ -145,6 +147,37 @@ class GuestTestTargets(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertEqual(self.graph_selections(["core/libs/prx/libScePad/include/Pad.hpp", path], closures),
                                  ["guest_a_tests", "guest_b_tests"])
+
+    def test_a_graph_without_the_paths_changed_since_its_commit_is_not_used(self):
+        closures = {"tests/guest_a_tests.exe": ["core/libs/tests/GuestA.cpp"],
+                    "tests/guest_b_tests.exe": ["core/libs/tests/GuestB.cpp", "core/libs/prx/libScePad/include/Pad.hpp"]}
+        self.assertEqual(self.graph_selections(["core/libs/prx/libScePad/include/Pad.hpp"], closures, since=None),
+                         ["guest_a_tests", "guest_b_tests"])
+
+    def test_a_path_changed_since_the_graph_widens_the_selection_to_the_tests_that_build_it(self):
+        closures = {"tests/guest_a_tests.exe": ["core/libs/tests/GuestA.cpp", "core/libs/prx/libScePad/src/Pad.cpp"],
+                    "tests/guest_b_tests.exe": ["core/libs/tests/GuestB.cpp", "core/libs/prx/libScePad/include/Pad.hpp"]}
+        self.assertEqual(
+            self.graph_selections(["core/libs/prx/libScePad/include/Pad.hpp"], closures,
+                                  since=["core/libs/prx/libScePad/src/Pad.cpp"]),
+            ["guest_a_tests", "guest_b_tests"])
+
+    def test_a_build_file_or_unknown_source_changed_since_the_graph_selects_every_guest_test(self):
+        closures = {"tests/guest_a_tests.exe": ["core/libs/tests/GuestA.cpp"],
+                    "tests/guest_b_tests.exe": ["core/libs/tests/GuestB.cpp", "core/libs/prx/libScePad/include/Pad.hpp"]}
+        for path in ("core/libs/prx/libNew/CMakeLists.txt", "core/libs/tests/cmake/new_tests.cmake",
+                     "core/libs/tests/NewGuest.cpp", "core/libs/prx/libNew/include/New.hpp", "cmake/Opus.cmake"):
+            with self.subTest(path=path):
+                self.assertEqual(
+                    self.graph_selections(["core/libs/prx/libScePad/include/Pad.hpp"], closures, since=[path]),
+                    ["guest_a_tests", "guest_b_tests"])
+
+    def test_documentation_changed_since_the_graph_keeps_the_narrow_selection(self):
+        closures = {"tests/guest_a_tests.exe": ["core/libs/tests/GuestA.cpp"],
+                    "tests/guest_b_tests.exe": ["core/libs/tests/GuestB.cpp", "core/libs/prx/libScePad/include/Pad.hpp"]}
+        self.assertEqual(
+            self.graph_selections(["core/libs/prx/libScePad/include/Pad.hpp"], closures, since=["docs/dev/BUILD.md"]),
+            ["guest_b_tests"])
 
 
 class OwnerResolution(unittest.TestCase):

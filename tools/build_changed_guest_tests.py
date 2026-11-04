@@ -27,7 +27,7 @@ def reaches_libs(changed):
     )
 
 
-def guest_test_targets(source_root, targets, changed_paths=None, graph_path=None):
+def guest_test_targets(source_root, targets, changed_paths=None, graph_path=None, graph_changed=None):
     selected = []
     for target in targets.values():
         if target.get("type") != "EXECUTABLE":
@@ -51,7 +51,7 @@ def guest_test_targets(source_root, targets, changed_paths=None, graph_path=None
         host_only.build_wide(path, BROAD_CHANGES, CMAKE_FRAGMENTS) or host_only.graph_resolvable(path) for path in changed
     ):
         return host_only.narrow_broad_change(
-            selected, BROAD_CHANGES, source_root, targets, changed, graph_path, CMAKE_FRAGMENTS)
+            selected, BROAD_CHANGES, source_root, targets, changed, graph_path, CMAKE_FRAGMENTS, graph_changed)
     return host_only.changed_source_targets(source_root, targets, selected, changed)
 
 
@@ -117,6 +117,7 @@ def main(argv=None):
     parser.add_argument("changed_paths", nargs="?", type=Path)
     parser.add_argument("--output-log", type=Path)
     parser.add_argument("--graph", type=Path, help="test graph of main; narrows header and CMakeLists.txt changes")
+    parser.add_argument("--graph-changed", type=Path, help="paths changed since the commit the test graph was written from")
     args = parser.parse_args(argv)
     try:
         if args.changed_paths is not None:
@@ -126,7 +127,7 @@ def main(argv=None):
                 return 0
         source_root, targets = host_only.read_reply(Path(os.path.realpath(args.build_dir)))
         changed_paths = args.changed_paths.read_text(encoding="utf-8").splitlines() if args.changed_paths else None
-        selected = guest_test_targets(source_root, targets, changed_paths, args.graph)
+        selected = guest_test_targets(source_root, targets, changed_paths, args.graph, args.graph_changed)
         if not selected:
             print("No guest core/libs test sources changed")
         else:

@@ -11,6 +11,9 @@ import select_tests
 
 BUILD_WIDE_PREFIXES = ("3rdparty/", "cmake/", "core/CMakeLists.txt", ".gitmodules")
 HEADER_SUFFIXES = (".h", ".hpp", ".hh", ".inl")
+GRAPH_INPUT_SUFFIXES = HEADER_SUFFIXES + (
+    ".hxx", ".inc", ".ipp", ".tpp", ".def", ".c", ".cc", ".cpp", ".cxx", ".m", ".mm", ".s", ".asm", ".rc",
+)
 BROAD_CHANGES = {
     "CMakeLists.txt",
     ".github/workflows/build.yml",
@@ -184,11 +187,15 @@ def artifact_key(path):
     return Path(path).as_posix().casefold()
 
 
-def graph_selected_targets(graph_path, targets, changed):
+def graph_selected_targets(graph_path, targets, changed, graph_changed=None):
     if graph_path is None or not Path(graph_path).is_file():
+        return None
+    if graph_changed is None:
+        print("test graph not used: the paths changed since its commit were not listed")
         return None
     try:
         graph = select_tests.load_graph(graph_path)
+        since = {Path(path).as_posix() for path in select_tests.changed_paths(graph_changed)}
     except (OSError, ValueError) as error:
         print(f"test graph not used: {error}")
         return None
@@ -199,7 +206,12 @@ def graph_selected_targets(graph_path, targets, changed):
     if unknown:
         print(f"test graph not used: {unknown[0]} is not in the graph")
         return None
-    picked, full = select_tests.select(graph, sorted(changed))
+    stale = sorted(path for path in since if select_tests.FULL.search(path) or select_tests.LOCAL.search(path)
+                   or path.endswith(GRAPH_INPUT_SUFFIXES) and path not in known)
+    if stale:
+        print(f"test graph not used: {stale[0]} changed since the graph was written and the graph cannot place it")
+        return None
+    picked, full = select_tests.select(graph, sorted(changed | since))
     if picked is None:
         print(f"test graph not used: {full[0]} changes every test")
         return None
@@ -232,17 +244,17 @@ def changed_source_targets(source_root, targets, selected, changed):
     ]
 
 
-def narrow_broad_change(selected, broad_changes, source_root, targets, changed, graph_path, suffixes=()):
+def narrow_broad_change(selected, broad_changes, source_root, targets, changed, graph_path, suffixes=(), graph_changed=None):
     if any(build_wide(path, broad_changes, suffixes) for path in changed):
         return selected
-    resolved = graph_selected_targets(graph_path, targets, changed)
+    resolved = graph_selected_targets(graph_path, targets, changed, graph_changed)
     if resolved is None:
         return selected
     direct = set(changed_source_targets(source_root, targets, selected, changed))
     return [name for name in selected if name in resolved or name in direct]
 
 
-def host_only_test_targets(source_root, targets, changed_paths=None, graph_path=None):
+def host_only_test_targets(source_root, targets, changed_paths=None, graph_path=None, graph_changed=None):
     selected = []
     for target in targets.values():
         if target.get("type") != "EXECUTABLE":
@@ -263,7 +275,8 @@ def host_only_test_targets(source_root, targets, changed_paths=None, graph_path=
         return selected
     changed = {Path(path).as_posix() for path in changed_paths if path}
     if any(build_wide(path, BROAD_CHANGES) or graph_resolvable(path) for path in changed):
-        return narrow_broad_change(selected, BROAD_CHANGES, source_root, targets, changed, graph_path)
+        return narrow_broad_change(
+            selected, BROAD_CHANGES, source_root, targets, changed, graph_path, graph_changed=graph_changed)
     return changed_source_targets(source_root, targets, selected, changed)
 
 
@@ -273,11 +286,12 @@ def main(argv=None):
     parser.add_argument("changed_paths", nargs="?", type=Path)
     parser.add_argument("--list-only", action="store_true")
     parser.add_argument("--graph", type=Path, help="test graph of main; narrows header and CMakeLists.txt changes")
+    parser.add_argument("--graph-changed", type=Path, help="paths changed since the commit the test graph was written from")
     args = parser.parse_args(argv)
     try:
         source_root, targets = read_reply(Path(os.path.realpath(args.build_dir)))
         changed_paths = args.changed_paths.read_text(encoding="utf-8").splitlines() if args.changed_paths else None
-        selected = host_only_test_targets(source_root, targets, changed_paths, args.graph)
+        selected = host_only_test_targets(source_root, targets, changed_paths, args.graph, args.graph_changed)
         if not selected:
             print("No changed host-only core/libs test executables require a link check")
             return 0

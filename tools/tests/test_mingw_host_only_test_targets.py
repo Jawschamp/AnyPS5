@@ -338,14 +338,17 @@ class HostOnlyTargets(unittest.TestCase):
         path.write_text(json.dumps({"tests": tests, "closures": closures}), encoding="utf-8")
         return path
 
-    def graph_selections(self, changed, graph):
+    def graph_selections(self, changed, graph, since=()):
+        since_file = Path(self.temporary.name) / "graph-changed.txt"
+        since_file.write_text("\0".join(since or ()), encoding="utf-8")
         build_dir = Path(self.temporary.name) / "build"
         if not build_dir.exists():
             first = self.target("first_tests")
             second = self.target("second_tests", source="core/libs/tests/Second.cpp")
             self.fixture([first, second])
         source_root, targets = build_mingw_host_only_tests.read_reply(build_dir)
-        return build_mingw_host_only_tests.host_only_test_targets(source_root, targets, changed, graph)
+        return build_mingw_host_only_tests.host_only_test_targets(
+            source_root, targets, changed, graph, None if since is None else since_file)
 
     def closures(self):
         return {
@@ -380,6 +383,32 @@ class HostOnlyTargets(unittest.TestCase):
             selected = self.graph_selections(["core/libs/tests/New.hpp"], graph)
         self.assertEqual(selected, ["first_tests", "second_tests"])
         self.assertIn("core/libs/tests/New.hpp is not in the graph", output.getvalue())
+
+    def test_a_graph_without_the_paths_changed_since_its_commit_is_not_used(self):
+        graph = self.graph(self.closures())
+        with contextlib.redirect_stdout(io.StringIO()) as output:
+            selected = self.graph_selections(["core/libs/tests/Shared.hpp"], graph, since=None)
+        self.assertEqual(selected, ["first_tests", "second_tests"])
+        self.assertIn("paths changed since its commit were not listed", output.getvalue())
+
+    def test_a_path_changed_since_the_graph_widens_the_selection_to_the_tests_that_build_it(self):
+        graph = self.graph(self.closures())
+        self.assertEqual(
+            self.graph_selections(["core/libs/tests/Shared.hpp"], graph, since=["core/libs/tests/Second.cpp"]),
+            ["first_tests", "second_tests"])
+
+    def test_a_build_file_or_unknown_source_changed_since_the_graph_selects_every_host_target(self):
+        graph = self.graph(self.closures())
+        for path in ("core/libs/prx/libNew/CMakeLists.txt", "core/libs/tests/cmake/new_tests.cmake",
+                     "core/libs/tests/NewHost.cpp", "core/libs/prx/libNew/include/New.hpp", "3rdparty/zlib"):
+            with self.subTest(path=path), contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(self.graph_selections(["core/libs/tests/Shared.hpp"], graph, since=[path]),
+                                 ["first_tests", "second_tests"])
+
+    def test_documentation_changed_since_the_graph_keeps_the_narrow_selection(self):
+        graph = self.graph(self.closures())
+        self.assertEqual(
+            self.graph_selections(["core/libs/tests/Shared.hpp"], graph, since=["docs/dev/BUILD.md"]), ["first_tests"])
 
     def test_missing_or_invalid_graph_selects_every_host_target(self):
         missing = Path(self.temporary.name) / "absent.json"
@@ -516,7 +545,10 @@ class WindowsPullRequestGateTests(unittest.TestCase):
         self.assertIn("github.event_name == 'pull_request'", restore)
         for script, arguments in (("build_mingw_host_only_tests.py", ""), ("build_changed_guest_tests.py", " --output-log ctest.log")):
             with self.subTest(script=script):
-                self.assertIn(f"python tools/{script} build changed.txt{arguments} --graph test-graph.json", windows)
+                self.assertIn(
+                    f"python tools/{script} build changed.txt{arguments} --graph test-graph.json --graph-changed graph-changed.txt",
+                    windows)
+        self.assertIn("graph-changed.txt", windows.split("List changed files for host-only test linking", 1)[1].split("Link changed", 1)[0])
 
 
 if __name__ == "__main__":
