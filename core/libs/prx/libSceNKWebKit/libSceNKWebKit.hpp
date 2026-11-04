@@ -2,6 +2,7 @@
 #include "prx/libSceNKWebKit/include/LegacyExports.hpp"
 
 #include "prx/libSceNKWebKit/include/Api.hpp"
+#include "prx/libSceNKWebKit/include/InspectorExports.hpp"
 #include "prx/libSceNKWebKit/include/InventoryExports.hpp"
 #include "prx/libSceNKWebKit/include/JscExports.hpp"
 #include "prx/libSceNKWebKit/include/ResourceResponseExports.hpp"
@@ -11,3 +12,4 @@
 #include "prx/libSceNKWebKit/include/WtfExports.hpp"
 #include "prx/libSceNKWebKit/include/WtfFastBitVector.hpp"
 #include "prx/libSceNKWebKit/src/Preferences.hpp"
+#include "prx/libSceNKWebKit/include/UrlHelpers.hpp"
