@@ -9,8 +9,21 @@
 #include <cstdlib>
 #include <exception>
 #include <memory>
+#ifdef __linux__
+#include <fcntl.h>
+#include <unistd.h>
+#endif
 
 constexpr int VulkanTestSkipped = 77;
+
+inline bool DmaBufImportsUnavailable() {
+#ifdef __linux__
+    const int device = open("/dev/udmabuf", O_RDWR | O_CLOEXEC);
+    if (device < 0) return true;
+    close(device);
+#endif
+    return false;
+}
 
 inline bool TargetHasCapability(const ShaderRecompiler::SpirvTarget& target, spv::Capability capability) {
     const auto& capabilities = target.supportedCapabilities;
