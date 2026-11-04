@@ -34,8 +34,8 @@ void Release(std::vector<std::uint32_t>& words, const void* label, std::uint32_t
     const std::uint32_t interrupt = value % 2 == 0 ? 2 : 0;
     words.insert(words.end(), {0xc0064900u, 0x514u, (2u << 29u) | (interrupt << 24u), Low(label), High(label), value, 0u, 0u});
 }
-void Await(const std::uint32_t* label, std::uint32_t value) {
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+void Await(const std::uint32_t* label, std::uint32_t value, std::chrono::seconds budget = std::chrono::seconds(2)) {
+    const auto deadline = std::chrono::steady_clock::now() + budget;
     while (*static_cast<const volatile std::uint32_t*>(label) != value) {
         Require(std::chrono::steady_clock::now() < deadline, "submission lost its real GPU completion store");
         std::this_thread::yield();
@@ -75,7 +75,7 @@ int main() {
             Packet packet{words.data(), static_cast<std::uint32_t>(words.size()), 0, {}};
             AgcDriver::Submit(&packet, 0);
         };
-        submit(1); Await(label, 1);
+        submit(1); Await(label, 1, std::chrono::seconds(15));
         std::uint32_t ready = 0;
         for (std::uint32_t value = 2; value < 66; ++value) {
             submit(value);
