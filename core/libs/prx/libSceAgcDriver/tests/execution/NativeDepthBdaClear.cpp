@@ -2,6 +2,7 @@
 #include "prx/libSceAgcDriver/Execution/include/VulkanDevice.hpp"
 #include "prx/libSceAgcDriver/Graphics/include/Draw.hpp"
 #include "prx/libSceAgcDriver/Graphics/include/DepthSurface.hpp"
+#include "prx/libSceAgcDriver/Graphics/include/GuestBufferMemory.hpp"
 #include "prx/libSceAgcDriver/Graphics/include/Recorder.hpp"
 #include "prx/libSceAgcDriver/Graphics/include/Texture.hpp"
 #include "prx/libc/include/GuestAllocations.hpp"
@@ -187,6 +188,11 @@ int RunNativeClear(AgcDriver::VulkanDevice& device, ClearConsumer consumer) {
     device.Dispatch(compile(), groups, 1u, 1u, {}, reinterpret_cast<std::uintptr_t>(code.data()));
     device.WaitIdle();
     Require(std::all_of(metadata.Data(), metadata.Data() + BlockBytes, [](auto value) { return value == 0u; }), "the warm-up native clear did not retain zero metadata");
+    const auto context = AgcDriver::VulkanDeviceTestAccess::Context(device);
+    if (!HostImportCovers(context, metadata.Address(), BlockBytes) && DmaBufImportsUnavailable()) {
+        std::puts("skipped, host imports are unavailable: the shared fixture backing was not imported as a host pointer and /dev/udmabuf is not accessible");
+        return VulkanTestSkipped;
+    }
     const bool depthWatched = Memory::Watched(depth.Address(), BlockBytes);
     const bool metadataWatched = Memory::Watched(metadata.Address(), BlockBytes);
     if (!depthWatched || !metadataWatched) {
@@ -197,7 +203,6 @@ int RunNativeClear(AgcDriver::VulkanDevice& device, ClearConsumer consumer) {
         std::puts(")");
         return VulkanTestSkipped;
     }
-    const auto context = AgcDriver::VulkanDeviceTestAccess::Context(device);
     Require(context.recorder != nullptr, "the native clear context has no recorder");
     context.recorder->Activate();
     struct Cleanup {
