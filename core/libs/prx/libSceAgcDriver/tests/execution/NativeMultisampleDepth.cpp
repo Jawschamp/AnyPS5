@@ -1981,7 +1981,7 @@ void CheckUnwrittenGuestAccess(Context context, VkFormat format, std::uint32_t f
 
 enum class BufferWrite { DepthPlane, Htile };
 
-void CheckBufferWrite(Context context, VkFormat format, std::uint32_t fragments, BufferWrite write) {
+bool CheckBufferWrite(Context context, VkFormat format, std::uint32_t fragments, BufferWrite write) {
     const VkExtent2D extent{5u, 3u};
     const auto bytes = static_cast<std::size_t>(MultisampledDepthBytes_nid_no_patch(extent, format == VK_FORMAT_D16_UNORM ? 2u : 4u, fragments));
     const auto metadataBytes = static_cast<std::size_t>(HtileMetadataBytes(extent));
@@ -2004,17 +2004,20 @@ void CheckBufferWrite(Context context, VkFormat format, std::uint32_t fragments,
         GuestBufferMemory buffer(context);
         buffer.AddWritable(address, length);
         buffer.Upload(false);
-        Require(HostImportCovers(context, address, length), "the native depth buffer-write fixture was not bound as a host import");
+        const bool covered = HostImportCovers(context, address, length);
+        if (!covered && DmaBufImportsUnavailable()) return false;
+        Require(covered, "the native depth buffer-write fixture was not bound as a host import");
         buffer.WriteBack();
+        return true;
     };
     Require(DepthSurfaceView(context, target) != VK_NULL_HANDLE && resident(), "native depth buffer-write fixture has no resident owner");
-    upload(unrelated.Address(), 256u);
+    if (!upload(unrelated.Address(), 256u)) return false;
     Require(resident(), "an unrelated buffer write retired a native depth surface");
-    if (write == BufferWrite::DepthPlane) upload(target.address + bytes - 256u, 256u);
-    else upload(target.htileAddress, metadataBytes);
+    if (!(write == BufferWrite::DepthPlane ? upload(target.address + bytes - 256u, 256u) : upload(target.htileAddress, metadataBytes))) return false;
     Require(!resident(), "a buffer the GPU may write left an unwritten native depth surface resident over it");
     for (std::size_t offset = 0u; offset < bytes; ++offset) Require(memory.Data()[offset] == guestByte(offset), "releasing an unwritten native depth surface for a buffer write changed its guest bytes");
     Require(std::all_of(metadata.Data(), metadata.Data() + metadataBytes, [](std::byte value) { return value == std::byte{0}; }), "releasing an unwritten native depth surface for a buffer write changed its HTILE");
+    return true;
 }
 
 void CheckBufferWrites(Context context, VkFormat format, std::uint32_t fragments) {
@@ -2022,7 +2025,11 @@ void CheckBufferWrites(Context context, VkFormat format, std::uint32_t fragments
         std::printf("skipped native depth buffer writes: the device lacks VK_EXT_external_memory_host, VK_KHR_buffer_device_address or the bufferDeviceAddress feature\n");
         return;
     }
-    for (const auto write : {BufferWrite::DepthPlane, BufferWrite::Htile}) CheckBufferWrite(context, format, fragments, write);
+    for (const auto write : {BufferWrite::DepthPlane, BufferWrite::Htile}) {
+        if (CheckBufferWrite(context, format, fragments, write)) continue;
+        std::printf("skipped native depth buffer writes: host imports are unavailable, the shared fixture backing was not imported as a host pointer and /dev/udmabuf is not accessible\n");
+        return;
+    }
     std::printf("Native depth format=%u samples=%u: a GPU buffer write over the depth or HTILE released the unwritten surface\n", static_cast<std::uint32_t>(format), fragments);
 }
 
